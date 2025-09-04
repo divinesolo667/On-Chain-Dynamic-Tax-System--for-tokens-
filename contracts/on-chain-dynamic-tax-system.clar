@@ -4,6 +4,8 @@
 (define-constant ERR-INVALID-AMOUNT (err u102))
 (define-constant ERR-INVALID-RECIPIENT (err u103))
 (define-constant ERR-INSUFFICIENT-TAX (err u104))
+(define-constant ERR-ALREADY-EXEMPTED (err u105))
+(define-constant ERR-NOT-EXEMPTED (err u106))
 
 (define-fungible-token dynamic-token)
 
@@ -23,6 +25,7 @@
 (define-map user-balances principal uint)
 (define-map transaction-history uint {sender: principal, recipient: principal, amount: uint, tax-paid: uint, block-height: uint})
 (define-map daily-volume uint uint)
+(define-map tax-exemptions principal bool)
 
 
 
@@ -63,9 +66,17 @@
 (define-read-only (get-current-volume)
   (ok (var-get current-block-volume)))
 
+(define-read-only (is-tax-exempt (address principal))
+  (default-to false (map-get? tax-exemptions address)))
+
 (define-read-only (calculate-tax (amount uint))
   (let ((tax-rate (unwrap-panic (get-current-tax-rate))))
     (ok (/ (* amount tax-rate) u10000))))
+
+(define-read-only (calculate-tax-for-user (amount uint) (user principal))
+  (if (is-tax-exempt user)
+    (ok u0)
+    (calculate-tax amount)))
 
 (define-private (should-reset-volume)
   (let ((current-block burn-block-height)
@@ -108,11 +119,13 @@
     
     (maybe-reset-volume)
     
-    (let ((tax-amount (unwrap-panic (calculate-tax amount))))
+    (let ((tax-amount (unwrap-panic (calculate-tax-for-user amount sender))))
       (let ((total-deduction (+ amount tax-amount)))
         (asserts! (>= (ft-get-balance dynamic-token sender) total-deduction) ERR-NOT-ENOUGH-BALANCE)
         (try! (ft-transfer? dynamic-token amount sender recipient))
-        (try! (ft-transfer? dynamic-token tax-amount sender (var-get treasury)))
+        (if (> tax-amount u0)
+          (try! (ft-transfer? dynamic-token tax-amount sender (var-get treasury)))
+          true)
         (update-volume amount)
         (var-set total-tax-collected (+ (var-get total-tax-collected) tax-amount))
         (ok true)))))
@@ -124,11 +137,13 @@
     
     (maybe-reset-volume)
     
-    (let ((tax-amount (unwrap-panic (calculate-tax amount))))
+    (let ((tax-amount (unwrap-panic (calculate-tax-for-user amount tx-sender))))
       (let ((total-deduction (+ amount tax-amount)))
         (asserts! (>= (ft-get-balance dynamic-token tx-sender) total-deduction) ERR-NOT-ENOUGH-BALANCE)
         (try! (ft-transfer? dynamic-token amount tx-sender recipient))
-        (try! (collect-tax tax-amount))
+        (if (> tax-amount u0)
+          (try! (collect-tax tax-amount))
+          true)
         (update-volume amount)
         (ok {amount: amount, tax-paid: tax-amount})))))
 
@@ -189,6 +204,20 @@
     (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
     (asserts! (> amount u0) ERR-INVALID-AMOUNT)
     (try! (ft-transfer? dynamic-token amount (var-get treasury) tx-sender))
+    (ok true)))
+
+(define-public (grant-tax-exemption (address principal))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (not (is-tax-exempt address)) ERR-ALREADY-EXEMPTED)
+    (map-set tax-exemptions address true)
+    (ok true)))
+
+(define-public (revoke-tax-exemption (address principal))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (is-tax-exempt address) ERR-NOT-EXEMPTED)
+    (map-delete tax-exemptions address)
     (ok true)))
 
 (begin
