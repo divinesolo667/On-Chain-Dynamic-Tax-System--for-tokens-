@@ -6,6 +6,8 @@
 (define-constant ERR-INSUFFICIENT-TAX (err u104))
 (define-constant ERR-ALREADY-EXEMPTED (err u105))
 (define-constant ERR-NOT-EXEMPTED (err u106))
+(define-constant ERR-INVALID-HOLIDAY-PERIOD (err u107))
+(define-constant ERR-HOLIDAY-ALREADY-ACTIVE (err u108))
 
 (define-fungible-token dynamic-token)
 
@@ -21,6 +23,10 @@
 (define-data-var last-volume-reset-block uint u0)
 (define-data-var total-tax-collected uint u0)
 (define-data-var volume-reset-interval uint u144)
+(define-data-var tax-holiday-active bool false)
+(define-data-var tax-holiday-start uint u0)
+(define-data-var tax-holiday-end uint u0)
+(define-data-var tax-holiday-discount uint u0)
 
 (define-map user-balances principal uint)
 (define-map transaction-history uint {sender: principal, recipient: principal, amount: uint, tax-paid: uint, block-height: uint})
@@ -69,6 +75,22 @@
 (define-read-only (is-tax-exempt (address principal))
   (default-to false (map-get? tax-exemptions address)))
 
+(define-read-only (is-tax-holiday-active)
+  (let ((current-block burn-block-height)
+        (start (var-get tax-holiday-start))
+        (end (var-get tax-holiday-end))
+        (active (var-get tax-holiday-active)))
+    (and active (>= current-block start) (<= current-block end))))
+
+(define-read-only (get-tax-holiday-info)
+  (ok {
+    active: (var-get tax-holiday-active),
+    start: (var-get tax-holiday-start),
+    end: (var-get tax-holiday-end),
+    discount: (var-get tax-holiday-discount),
+    currently-active: (is-tax-holiday-active)
+  }))
+
 (define-read-only (calculate-tax (amount uint))
   (let ((tax-rate (unwrap-panic (get-current-tax-rate))))
     (ok (/ (* amount tax-rate) u10000))))
@@ -76,7 +98,11 @@
 (define-read-only (calculate-tax-for-user (amount uint) (user principal))
   (if (is-tax-exempt user)
     (ok u0)
-    (calculate-tax amount)))
+    (let ((base-tax (unwrap-panic (calculate-tax amount))))
+      (if (is-tax-holiday-active)
+        (let ((discount (var-get tax-holiday-discount)))
+          (ok (/ (* base-tax (- u10000 discount)) u10000)))
+        (ok base-tax)))))
 
 (define-private (should-reset-volume)
   (let ((current-block burn-block-height)
@@ -218,6 +244,35 @@
     (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
     (asserts! (is-tax-exempt address) ERR-NOT-EXEMPTED)
     (map-delete tax-exemptions address)
+    (ok true)))
+
+(define-public (activate-tax-holiday (start-block uint) (end-block uint) (discount-percent uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (not (var-get tax-holiday-active)) ERR-HOLIDAY-ALREADY-ACTIVE)
+    (asserts! (> end-block start-block) ERR-INVALID-HOLIDAY-PERIOD)
+    (asserts! (<= discount-percent u10000) ERR-INVALID-AMOUNT)
+    (var-set tax-holiday-active true)
+    (var-set tax-holiday-start start-block)
+    (var-set tax-holiday-end end-block)
+    (var-set tax-holiday-discount discount-percent)
+    (ok true)))
+
+(define-public (deactivate-tax-holiday)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (var-set tax-holiday-active false)
+    (var-set tax-holiday-start u0)
+    (var-set tax-holiday-end u0)
+    (var-set tax-holiday-discount u0)
+    (ok true)))
+
+(define-public (extend-tax-holiday (new-end-block uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (var-get tax-holiday-active) ERR-INVALID-HOLIDAY-PERIOD)
+    (asserts! (> new-end-block (var-get tax-holiday-end)) ERR-INVALID-HOLIDAY-PERIOD)
+    (var-set tax-holiday-end new-end-block)
     (ok true)))
 
 (begin
