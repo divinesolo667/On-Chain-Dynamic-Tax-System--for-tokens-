@@ -246,6 +246,32 @@
     (map-delete tax-exemptions address)
     (ok true)))
 
+(define-private (grant-exemption (addr principal))
+  (begin
+    (if (is-tax-exempt addr)
+      true
+      (map-set tax-exemptions addr true))
+    true))
+
+(define-private (revoke-exemption (addr principal))
+  (begin
+    (if (is-tax-exempt addr)
+      (map-delete tax-exemptions addr)
+      true)
+    true))
+
+(define-public (grant-tax-exemptions-batch (addresses (list 200 principal)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (map grant-exemption addresses)
+    (ok true)))
+
+(define-public (revoke-tax-exemptions-batch (addresses (list 200 principal)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (map revoke-exemption addresses)
+    (ok true)))
+
 (define-public (activate-tax-holiday (start-block uint) (end-block uint) (discount-percent uint))
   (begin
     (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
