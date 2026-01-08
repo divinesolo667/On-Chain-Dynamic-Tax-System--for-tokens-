@@ -304,3 +304,23 @@
 (begin
   (try! (ft-mint? dynamic-token u1000000000000 CONTRACT-OWNER))
   (var-set last-volume-reset-block burn-block-height))
+ 
+ (define-read-only (quote-transfer (amount uint) (sender principal) (recipient principal))
+   (let (
+         (sender-match (is-eq tx-sender sender))
+         (amount-positive (> amount u0))
+         (recipient-different (not (is-eq sender recipient)))
+         (tax-amount (unwrap-panic (calculate-tax-for-user amount sender)))
+         (total (+ amount tax-amount))
+         (balance (ft-get-balance dynamic-token sender))
+         (sufficient (>= balance total)))
+     (ok {
+       sender-match: sender-match,
+       valid-amount: amount-positive,
+       valid-recipient: recipient-different,
+       sufficient-balance: sufficient,
+       amount: amount,
+       tax: tax-amount,
+       total-deduction: total,
+       recipient-credit: amount
+     })))
