@@ -324,3 +324,49 @@
        total-deduction: total,
        recipient-credit: amount
      })))
+
+ (define-private (accumulate-batch (entry {amount: uint, recipient: principal}) (acc {sender: principal, total-amount: uint, total-tax: uint, total-deduction: uint, any-invalid: bool, initial-balance: uint}))
+   (let (
+         (entry-amount (get amount entry))
+         (entry-recipient (get recipient entry))
+         (acc-sender (get sender acc))
+         (amount-positive (> entry-amount u0))
+         (recipient-different (not (is-eq entry-recipient acc-sender)))
+         (tax-amount (unwrap-panic (calculate-tax-for-user entry-amount acc-sender)))
+         (new-total-amount (+ (get total-amount acc) entry-amount))
+         (new-total-tax (+ (get total-tax acc) tax-amount))
+         (new-total-deduction (+ (get total-deduction acc) (+ entry-amount tax-amount)))
+         (invalid (or (not amount-positive) (not recipient-different)))
+       )
+     {
+       sender: acc-sender,
+       total-amount: new-total-amount,
+       total-tax: new-total-tax,
+       total-deduction: new-total-deduction,
+       any-invalid: (or (get any-invalid acc) invalid),
+       initial-balance: (get initial-balance acc)
+     }))
+
+ (define-read-only (quote-batch-transfer (entries (list 200 {amount: uint, recipient: principal})) (sender principal))
+   (let (
+         (initial-balance (ft-get-balance dynamic-token sender))
+         (initial-acc {
+           sender: sender,
+           total-amount: u0,
+           total-tax: u0,
+           total-deduction: u0,
+           any-invalid: false,
+           initial-balance: initial-balance
+         })
+         (acc (fold accumulate-batch entries initial-acc))
+         (sufficient (>= (get initial-balance acc) (get total-deduction acc)))
+       )
+     (ok {
+       sender-match: (is-eq tx-sender sender),
+       all-valid: (not (get any-invalid acc)),
+       sufficient-balance: sufficient,
+       total-amount: (get total-amount acc),
+       total-tax: (get total-tax acc),
+       total-deduction: (get total-deduction acc),
+       initial-balance: (get initial-balance acc)
+     })))
